@@ -1,0 +1,29 @@
+# Dataset — ignore all data except the split file
+data/
+!data/split_indices.pt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model weights
+*.pt
+!data/split_indices.pt
+
+# Output folders
+eda/
+results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ZIP files
+*.zip
