@@ -9,7 +9,7 @@ the SVM finds a better margin-based decision boundary in the learned
 embedding space than a linear softmax head.
 
 Requirements:
-    - A trained CNN saved as  models/cnn_weights.pth   (state_dict)
+    - A trained CNN saved as  models/resnet50_best.pt   (state_dict)
     - data/faces/  with real/ and fake/ subdirectories
 
 Output:
@@ -86,14 +86,14 @@ class FaceDataset(Dataset):
 
 # ── CNN backbone (no classification head) ─────────────────────────────────────
 def build_backbone(arch: str, weights_path: str, device):
-    if arch == "resnet18":
-        model = models.resnet18(weights=None)
+    if arch == "resnet50":
+        model = models.resnet50(weights=None)
         model.fc = nn.Identity()   # remove final FC → output is 512-dim
     elif arch == "efficientnet":
         model = models.efficientnet_b0(weights=None)
         model.classifier = nn.Identity()
     else:
-        raise ValueError(f"Unknown arch: {arch}. Choose 'resnet18' or 'efficientnet'")
+        raise ValueError(f"Unknown arch: {arch}. Choose 'resnet50' or 'efficientnet'")
 
     if os.path.exists(weights_path):
         state = torch.load(weights_path, map_location=device)
@@ -107,7 +107,7 @@ def build_backbone(arch: str, weights_path: str, device):
     else:
         print(f"⚠  No weights found at {weights_path}.")
         print("   Using random weights — embeddings will be meaningless.")
-        print("   Ask your teammate to run:  torch.save(model.state_dict(), 'models/cnn_weights.pth')")
+        print("   Ask your teammate to run:  torch.save(model.state_dict(), 'models/resnet50_best.pt')")
 
     model.eval()
     model.to(device)
@@ -154,9 +154,9 @@ def main():
     parser.add_argument('--faces_dir',     default=FACES_DIR)
     parser.add_argument('--models_dir',    default=MODELS_DIR)
     parser.add_argument('--results_dir',   default=RESULTS_DIR)
-    parser.add_argument('--arch',          default='resnet18',
-                        choices=['resnet18', 'efficientnet'])
-    parser.add_argument('--weights',       default='models/cnn_weights.pth')
+    parser.add_argument('--arch',          default='resnet50',
+                        choices=['resnet50', 'efficientnet'])
+    parser.add_argument('--weights',       default='models/resnet50_best.pt')
     parser.add_argument('--max_per_class', type=int, default=0)
     args = parser.parse_args()
 
