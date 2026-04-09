@@ -1,12 +1,13 @@
 ## Model Performance Comparison
 
 | Model | Accuracy | Precision | Recall | F1 | AUC |
-|---|---|---|---|---|---|
+|-------|----------|-----------|-----------|--------|-----|
 | ResNet-50 | 99.46% | 99.82% | 99.52% | 99.67% | 99.98% |
 | EfficientNet-B0 | 99.27% | 99.79% | 99.32% | 99.55% | 99.96% |
-| SVM | — | — | — | — | — |
-| Random Forest | — | — | — | — | — |
-| CNN + SVM Hybrid | — | — | — | — | — |
+| CNN + SVM Hybrid | 99.97% | 99.93% | 100% | 99.97% | 100% |
+| Random Forest | 87.97% | 86.53% | 89.93% | 88.20% | 94.75% |
+| SVM | 84.67% | 84.17% | 85.40% | 84.78% | 92.69% |
+| AdaBoost | 60.83% | 59.99% | 65.07% | 62.42% | 66.06% |
 
 > Test set: 23,777 images (17.8% real, 82.2% fake) — FaceForensics++
 > SVM, Random Forest,
