@@ -19,7 +19,7 @@ venv/
 
 # Output folders
 eda/
-# results/
+results/
 
 # OS
 .DS_Store
