@@ -177,18 +177,18 @@ def main(args):
     print(f"\nSampling {args.n_samples} images per class from {data_dir}")
     dataset = DeepfakeDataset(data_dir, transform=None)
 
-    real_paths = [(p, l) for p, l in dataset.samples if l == 0]
-    fake_paths = [(p, l) for p, l in dataset.samples if l == 1]
+    real_paths = [(p, label) for p, label in dataset.samples if label == 0]
+    fake_paths = [(p, label) for p, label in dataset.samples if label == 1]
 
     random.seed(42)
     sample_real = random.sample(real_paths, min(args.n_samples, len(real_paths)))
     sample_fake = random.sample(fake_paths, min(args.n_samples, len(fake_paths)))
 
-    print(f"\n--- Real samples ---")
+    print("\n--- Real samples ---")
     for img_path, label in sample_real:
         process_image(img_path, label, gradcam, device, args.model, save_dir)
 
-    print(f"\n--- Fake samples ---")
+    print("\n--- Fake samples ---")
     for img_path, label in sample_fake:
         process_image(img_path, label, gradcam, device, args.model, save_dir)
 

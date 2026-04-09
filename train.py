@@ -23,7 +23,8 @@ import torchvision.models as models
 import torchvision.transforms as T
 import cv2
 import numpy as np
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score  # noqa: F401
+from tqdm import tqdm
 
 # ── Reproducibility ───────────────────────────────────────────────────────────
 SEED = 42
@@ -115,8 +116,10 @@ def run_epoch(model, loader, criterion, optimizer, device, train=True):
     total_loss = 0.0
     all_preds, all_labels = [], []
 
+    phase = "Train" if train else "Val  "
     with torch.set_grad_enabled(train):
-        for imgs, labels in loader:
+        pbar = tqdm(loader, desc=f"    {phase}", leave=False, unit="batch")
+        for imgs, labels in pbar:
             imgs, labels = imgs.to(device), labels.to(device)
             logits = model(imgs).squeeze(1)          # (B,)
             loss = criterion(logits, labels)
@@ -130,6 +133,7 @@ def run_epoch(model, loader, criterion, optimizer, device, train=True):
             preds = (torch.sigmoid(logits) >= 0.5).long().cpu().numpy()
             all_preds.extend(preds)
             all_labels.extend(labels.long().cpu().numpy())
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     n = len(loader.dataset)
     avg_loss = total_loss / n
@@ -229,7 +233,7 @@ def main(args):
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase1_epochs)
 
-    for epoch in range(1, phase1_epochs + 1):
+    for epoch in tqdm(range(1, phase1_epochs + 1), desc="  Phase 1", unit="epoch"):
         t0 = time.time()
         tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer, device, train=True)
         va_loss, va_acc = run_epoch(model, val_loader,   criterion, None,      device, train=False)
@@ -246,10 +250,10 @@ def main(args):
             torch.save(model.state_dict(), ckpt_path)
             flag = "  [saved]"
 
-        print(f"  Ep {epoch:02d}/{phase1_epochs}  "
-              f"train loss={tr_loss:.4f} acc={tr_acc:.4f}  "
-              f"val loss={va_loss:.4f} acc={va_acc:.4f}  "
-              f"({time.time()-t0:.0f}s){flag}")
+        tqdm.write(f"  Ep {epoch:02d}/{phase1_epochs}  "
+                   f"train loss={tr_loss:.4f} acc={tr_acc:.4f}  "
+                   f"val loss={va_loss:.4f} acc={va_acc:.4f}  "
+                   f"({time.time()-t0:.0f}s){flag}")
 
     # ── Phase 2: full fine-tune ────────────────────────────────────────────────
     phase2_epochs = args.epochs - phase1_epochs
@@ -259,7 +263,7 @@ def main(args):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_finetune, weight_decay=1e-4)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase2_epochs)
 
-        for epoch in range(1, phase2_epochs + 1):
+        for epoch in tqdm(range(1, phase2_epochs + 1), desc="  Phase 2", unit="epoch"):
             t0 = time.time()
             tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer, device, train=True)
             va_loss, va_acc = run_epoch(model, val_loader,   criterion, None,      device, train=False)
@@ -276,10 +280,10 @@ def main(args):
                 torch.save(model.state_dict(), ckpt_path)
                 flag = "  [saved]"
 
-            print(f"  Ep {epoch:02d}/{phase2_epochs}  "
-                  f"train loss={tr_loss:.4f} acc={tr_acc:.4f}  "
-                  f"val loss={va_loss:.4f} acc={va_acc:.4f}  "
-                  f"({time.time()-t0:.0f}s){flag}")
+            tqdm.write(f"  Ep {epoch:02d}/{phase2_epochs}  "
+                       f"train loss={tr_loss:.4f} acc={tr_acc:.4f}  "
+                       f"val loss={va_loss:.4f} acc={va_acc:.4f}  "
+                       f"({time.time()-t0:.0f}s){flag}")
 
     # ── Save history ──────────────────────────────────────────────────────────
     hist_path = f"results/{args.model}_history.json"
@@ -339,7 +343,7 @@ if __name__ == "__main__":
                         help="Learning rate for phase 2 (full fine-tune)")
     parser.add_argument("--workers",       type=int,   default=4,
                         help="DataLoader num_workers")
-    parser.add_argument("--data-dir",      default="~/OneDrive/Desktop/DeepFake Detection_images/data/faces",
+    parser.add_argument("--data-dir",      default="~/projects/ML/data/faces",
                         help="Path to faces dir containing real/ and fake/ subfolders")
     parser.add_argument("--split",         default=None,
                         help="Path to split_indices.pt (auto-detected if omitted)")
