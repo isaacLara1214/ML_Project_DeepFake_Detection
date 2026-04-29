@@ -1,0 +1,20 @@
+[
+  {
+    "model": "CNN_SVM_Hybrid",
+    "accuracy": 0.8585,
+    "precision": 0.9051,
+    "recall": 0.9287,
+    "f1": 0.9167,
+    "auc": 0.8148,
+    "confusion_matrix": [
+      [
+        1941,
+        1999
+      ],
+      [
+        1464,
+        19067
+      ]
+    ]
+  }
+]
