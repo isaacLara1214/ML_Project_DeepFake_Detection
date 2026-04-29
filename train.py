@@ -52,6 +52,17 @@ val_transform = T.Compose([
 ])
 
 
+class DropoutLinear(nn.Linear):
+    """Linear head with input dropout while keeping fc.weight/fc.bias keys."""
+
+    def __init__(self, in_features, out_features=1, p=0.5):
+        super().__init__(in_features, out_features)
+        self.dropout = nn.Dropout(p)
+
+    def forward(self, x):
+        return super().forward(self.dropout(x))
+
+
 # ── Dataset ───────────────────────────────────────────────────────────────────
 class DeepfakeDataset(Dataset):
     """Walks data/faces/real and data/faces/fake, assigns labels 0/1."""
@@ -62,7 +73,8 @@ class DeepfakeDataset(Dataset):
 
         for label, folder in [(0, "real"), (1, "fake")]:
             folder_path = os.path.join(root_dir, folder)
-            for root, _, files in os.walk(folder_path):
+            for root, dirs, files in os.walk(folder_path):
+                dirs.sort()
                 for f in sorted(files):
                     if f.lower().endswith((".jpg", ".jpeg", ".png")):
                         self.samples.append((os.path.join(root, f), label))
@@ -84,18 +96,18 @@ def build_model(name: str, freeze_backbone: bool = True) -> nn.Module:
     """Return a pretrained model with a binary classification head."""
     if name == "resnet50":
         model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+        in_features = model.fc.in_features
         if freeze_backbone:
             for param in model.parameters():
                 param.requires_grad = False
-        # Replace final FC
-        model.fc = nn.Linear(model.fc.in_features, 1)
+        model.fc = DropoutLinear(in_features, 1, p=0.5)
 
     elif name == "efficientnet_b0":
         model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
         if freeze_backbone:
             for param in model.parameters():
                 param.requires_grad = False
-        # Replace classifier head
+        model.classifier[0] = nn.Dropout(p=0.5)
         in_features = model.classifier[1].in_features
         model.classifier[1] = nn.Linear(in_features, 1)
 
@@ -110,9 +122,31 @@ def unfreeze_all(model: nn.Module):
         param.requires_grad = True
 
 
+def get_param_groups(model: nn.Module, name: str, lr_backbone: float, lr_head: float):
+    """Create optimizer groups for differential learning rates."""
+    head = model.fc if name == "resnet50" else model.classifier
+    head_param_ids = {id(p) for p in head.parameters()}
+
+    backbone_params = [
+        p for p in model.parameters()
+        if p.requires_grad and id(p) not in head_param_ids
+    ]
+    head_params = [p for p in head.parameters() if p.requires_grad]
+
+    return [
+        {"params": backbone_params, "lr": lr_backbone},
+        {"params": head_params, "lr": lr_head},
+    ]
+
+
 # ── Training helpers ──────────────────────────────────────────────────────────
-def run_epoch(model, loader, criterion, optimizer, device, train=True):
+def run_epoch(model, loader, criterion, optimizer, device, train=True, freeze_bn=False):
     model.train(train)
+    if freeze_bn:
+        for module in model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                module.eval()
+
     total_loss = 0.0
     all_preds, all_labels = [], []
 
@@ -148,8 +182,11 @@ def main(args):
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("results", exist_ok=True)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir  = os.path.join(script_dir, "models")
+    results_dir = os.path.join(script_dir, "results")
+    os.makedirs(models_dir,  exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
 
     # ── Data ──────────────────────────────────────────────────────────────────
     print("\nLoading dataset...")
@@ -163,40 +200,48 @@ def main(args):
         print("  Pass --data-dir to point to your faces directory.")
         return
 
-    # Subsample if --max-samples is set (useful for CPU training)
-    n = len(full_train_ds)
-    keep = None
-    if args.max_samples and args.max_samples < n:
-        rng = torch.Generator().manual_seed(SEED)
-        keep = torch.randperm(n, generator=rng)[:args.max_samples].tolist()
-        full_train_ds = Subset(full_train_ds, keep)
-        full_val_ds   = Subset(full_val_ds,   keep)
-        # Rebuild samples list for label counting later
-        all_samples = [full_train_ds.dataset.samples[i] for i in keep]
-        n = args.max_samples
-        print(f"Subsampled to {n} images (--max-samples)")
-    else:
-        all_samples = full_train_ds.samples
+    all_samples = full_train_ds.samples
+    n_total = len(all_samples)
 
-    # Generate 70/15/15 split
-    train_size = int(0.70 * n)
-    val_size   = int(0.15 * n)
-    idx = torch.randperm(n, generator=torch.Generator().manual_seed(SEED)).tolist()
-    train_idx = idx[:train_size]
-    val_idx   = idx[train_size:train_size + val_size]
-    test_idx  = idx[train_size + val_size:]
-
-    # Save split — map back to full-dataset indices so evaluate.py works correctly
+    # Load precomputed split (must be generated by generate_split.py)
     split_path = args.split if args.split else os.path.join(os.path.dirname(data_dir), "split_indices.pt")
     split_path = os.path.expanduser(split_path)
-    if keep is not None:
-        save_train = [keep[i] for i in train_idx]
-        save_val   = [keep[i] for i in val_idx]
-        save_test  = [keep[i] for i in test_idx]
-    else:
-        save_train, save_val, save_test = train_idx, val_idx, test_idx
-    torch.save({"train": save_train, "val": save_val, "test": save_test}, split_path)
-    print(f"Split saved to {split_path}  (train={train_size}, val={val_size}, test={n - train_size - val_size})")
+    if not os.path.exists(split_path):
+        print(f"ERROR: split file not found at {split_path}")
+        print("  Run: python generate_split.py --data-dir <faces_dir> --out <split_path>")
+        return
+
+    split = torch.load(split_path)
+    if not all(k in split for k in ("train", "val", "test")):
+        print("ERROR: split file is missing one or more keys: train, val, test")
+        return
+
+    train_idx = list(split["train"])
+    val_idx = list(split["val"])
+    test_idx = list(split["test"])
+
+    if any(i < 0 or i >= n_total for i in train_idx + val_idx + test_idx):
+        print("ERROR: split indices are out of range for current dataset.")
+        print("  Regenerate split with the same data directory used for training.")
+        return
+
+    overlap = (set(train_idx) & set(val_idx)) | (set(train_idx) & set(test_idx)) | (set(val_idx) & set(test_idx))
+    if overlap:
+        print("ERROR: split file has overlapping indices between train/val/test")
+        return
+
+    if args.max_samples and args.max_samples < n_total:
+        keep = set(torch.randperm(n_total, generator=torch.Generator().manual_seed(SEED))[:args.max_samples].tolist())
+        train_idx = [i for i in train_idx if i in keep]
+        val_idx = [i for i in val_idx if i in keep]
+        test_idx = [i for i in test_idx if i in keep]
+        print(f"Subsampled to {len(train_idx) + len(val_idx) + len(test_idx)} images (--max-samples)")
+
+    if len(train_idx) == 0 or len(val_idx) == 0:
+        print("ERROR: train/val split is empty after filtering; adjust split or --max-samples")
+        return
+
+    print(f"Split loaded from {split_path}  (train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)})")
 
     train_ds = Subset(full_train_ds, train_idx)
     val_ds   = Subset(full_val_ds,   val_idx)
@@ -222,7 +267,7 @@ def main(args):
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
     best_val_acc = 0.0
-    ckpt_path = f"models/{args.model}_best.pt"
+    ckpt_path = os.path.join(models_dir, f"{args.model}_best.pt")
 
     # ── Phase 1: train head only ───────────────────────────────────────────────
     phase1_epochs = max(1, args.phase1_epochs)
@@ -235,8 +280,8 @@ def main(args):
 
     for epoch in tqdm(range(1, phase1_epochs + 1), desc="  Phase 1", unit="epoch"):
         t0 = time.time()
-        tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer, device, train=True)
-        va_loss, va_acc = run_epoch(model, val_loader,   criterion, None,      device, train=False)
+        tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer, device, train=True, freeze_bn=True)
+        va_loss, va_acc = run_epoch(model, val_loader,   criterion, None,      device, train=False, freeze_bn=True)
         scheduler.step()
 
         history["train_loss"].append(tr_loss)
@@ -258,9 +303,12 @@ def main(args):
     # ── Phase 2: full fine-tune ────────────────────────────────────────────────
     phase2_epochs = args.epochs - phase1_epochs
     if phase2_epochs > 0:
-        print(f"\n=== Phase 2: full fine-tune ({phase2_epochs} epochs, lr={args.lr_finetune}) ===")
+        print(f"\n=== Phase 2: full fine-tune ({phase2_epochs} epochs, backbone lr={args.lr_backbone}, head lr={args.lr_finetune}) ===")
         unfreeze_all(model)
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_finetune, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(
+            get_param_groups(model, args.model, args.lr_backbone, args.lr_finetune),
+            weight_decay=1e-4,
+        )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase2_epochs)
 
         for epoch in tqdm(range(1, phase2_epochs + 1), desc="  Phase 2", unit="epoch"):
@@ -286,7 +334,7 @@ def main(args):
                        f"({time.time()-t0:.0f}s){flag}")
 
     # ── Save history ──────────────────────────────────────────────────────────
-    hist_path = f"results/{args.model}_history.json"
+    hist_path = os.path.join(results_dir, f"{args.model}_history.json")
     with open(hist_path, "w") as f:
         json.dump(history, f, indent=2)
 
@@ -319,7 +367,7 @@ def main(args):
 
         fig.suptitle(f"{args.model} — Training Curves")
         plt.tight_layout()
-        plot_path = f"results/{args.model}_training_curves.png"
+        plot_path = os.path.join(results_dir, f"{args.model}_training_curves.png")
         plt.savefig(plot_path, dpi=150)
         print(f"Plot:       {plot_path}")
         plt.close()
@@ -340,7 +388,9 @@ if __name__ == "__main__":
     parser.add_argument("--lr-head",       type=float, default=1e-3,
                         help="Learning rate for phase 1 (head only)")
     parser.add_argument("--lr-finetune",   type=float, default=1e-4,
-                        help="Learning rate for phase 2 (full fine-tune)")
+                        help="Learning rate for phase 2 head")
+    parser.add_argument("--lr-backbone",   type=float, default=1e-5,
+                        help="Learning rate for phase 2 backbone")
     parser.add_argument("--workers",       type=int,   default=4,
                         help="DataLoader num_workers")
     parser.add_argument("--data-dir",      default="~/projects/ML/data/faces",

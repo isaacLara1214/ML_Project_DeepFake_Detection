@@ -1,0 +1,4 @@
+{
+    "python.defaultInterpreterPath": "/home/isaac/venvs/deepfake/bin/python3.13",
+    "python.terminal.activateEnvironment": true
+}

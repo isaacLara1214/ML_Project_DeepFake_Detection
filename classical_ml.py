@@ -19,10 +19,12 @@ Usage:
 
 import os
 import json
+import time
 import argparse
 import numpy as np
 import pickle
 
+from tqdm import tqdm
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.preprocessing import StandardScaler
@@ -90,7 +92,7 @@ def main():
                           probability=True, random_state=RANDOM_STATE)),
         ]),
         "RandomForest": RandomForestClassifier(
-            n_estimators=200, n_jobs=-1, random_state=RANDOM_STATE),
+            n_estimators=200, n_jobs=-1, random_state=RANDOM_STATE, warm_start=True),
         "AdaBoost": AdaBoostClassifier(
             n_estimators=100, random_state=RANDOM_STATE),
     }
@@ -98,15 +100,43 @@ def main():
     all_metrics = []
     pr_data = {}
 
-    for name, clf in classifiers.items():
-        print(f"\n⏳ Training {name}...")
-        clf.fit(X_tr, y_tr)
+    for name, clf in tqdm(classifiers.items(), desc="Models", unit="model"):
+        tqdm.write(f"\n=== Training {name} ===")
+        t0 = time.time()
+
+        if isinstance(clf, RandomForestClassifier):
+            total, batch = 200, 10
+            clf.set_params(n_estimators=batch)
+            with tqdm(total=total, desc="  Trees", unit="tree", leave=False) as pbar:
+                clf.fit(X_tr, y_tr)
+                pbar.update(batch)
+                while clf.n_estimators < total:
+                    next_n = min(clf.n_estimators + batch, total)
+                    clf.set_params(n_estimators=next_n)
+                    clf.fit(X_tr, y_tr)
+                    pbar.update(batch)
+                    pbar.set_postfix(trees=clf.n_estimators)
+
+        elif isinstance(clf, AdaBoostClassifier):
+            # warm_start not supported — fit in one shot
+            tqdm.write("  Fitting 100 boosting rounds (no step-level progress available)...")
+            clf.fit(X_tr, y_tr)
+
+        else:
+            # SVM: single convex optimisation — no incremental steps possible
+            tqdm.write("  Step 1/2: Scaling features (StandardScaler)...")
+            tqdm.write("  Step 2/2: Fitting SVM — libsvm optimisation, no step-level progress available...")
+            clf.fit(X_tr, y_tr)
+
+        elapsed = time.time() - t0
+        tqdm.write(f"  Fit complete ({elapsed:.0f}s)")
 
         model_path = os.path.join(args.models_dir, f"{name.lower()}.pkl")
         with open(model_path, 'wb') as f:
             pickle.dump(clf, f)
-        print(f"   💾 {model_path}")
+        tqdm.write(f"  Saved → {model_path}")
 
+        tqdm.write(f"  Evaluating on test set...")
         metrics, y_prob = evaluate(name, clf, X_te, y_te)
         all_metrics.append(metrics)
 
@@ -114,6 +144,7 @@ def main():
         ap = average_precision_score(y_te, y_prob)
         pr_data[name] = {"precision": prec.tolist(), "recall": rec.tolist(),
                          "ap": round(ap, 4)}
+        tqdm.write(f"  AP={ap:.4f}  acc={metrics['accuracy']:.4f}  f1={metrics['f1']:.4f}")
 
     # Save outputs
     with open(os.path.join(args.results_dir, "classical_results.json"), 'w') as f:

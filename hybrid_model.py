@@ -25,6 +25,7 @@ Usage:
 
 import os
 import json
+import time
 import argparse
 import numpy as np
 import pickle
@@ -39,7 +40,7 @@ from tqdm import tqdm
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
 from sklearn.metrics import (accuracy_score, precision_score, recall_score,
                              f1_score, roc_auc_score, confusion_matrix,
                              precision_recall_curve, average_precision_score)
@@ -62,7 +63,8 @@ class FaceDataset(Dataset):
             if not os.path.isdir(d):
                 continue
             count = 0
-            for root, _, files in os.walk(d):
+            for root, dirs, files in os.walk(d):
+                dirs.sort()  # match train.py DeepfakeDataset ordering
                 for f in sorted(files):
                     if f.lower().endswith(('.jpg', '.jpeg', '.png')):
                         self.samples.append((os.path.join(root, f), label_id))
@@ -118,10 +120,9 @@ def build_backbone(arch: str, weights_path: str, device):
 def extract_embeddings(model, dataloader, device):
     embeddings, labels = [], []
     with torch.no_grad():
-        for imgs, lbls in tqdm(dataloader, desc="Extracting embeddings"):
+        for imgs, lbls in tqdm(dataloader, desc="  Extracting embeddings", unit="batch"):
             imgs = imgs.to(device)
             emb = model(imgs)
-            # Flatten in case model returns (B, C, 1, 1)
             emb = emb.view(emb.size(0), -1)
             embeddings.append(emb.cpu().numpy())
             labels.extend(lbls.numpy())
@@ -158,6 +159,10 @@ def main():
                         choices=['resnet50', 'efficientnet'])
     parser.add_argument('--weights',       default='models/resnet50_best.pt')
     parser.add_argument('--max_per_class', type=int, default=0)
+    parser.add_argument('--split',         default=os.path.expanduser('~/projects/ML/data/split_indices.pt'),
+                        help='Path to video-level split_indices.pt from generate_split.py')
+    parser.add_argument('--cv',            type=int, default=0,
+                        help='If >1, run k-fold cross-validation instead of single split (e.g. --cv 5)')
     args = parser.parse_args()
 
     os.makedirs(args.models_dir,  exist_ok=True)
@@ -180,38 +185,77 @@ def main():
     print(f"Total: {len(dataset)}")
 
     loader = DataLoader(dataset, batch_size=BATCH_SIZE,
-                        shuffle=False, num_workers=4, pin_memory=True)
+                        shuffle=False, num_workers=0, pin_memory=True)
 
     model = build_backbone(args.arch, args.weights, device)
 
-    print("\n⏳ Extracting CNN embeddings...")
+    print(f"\n=== Extracting CNN embeddings ({args.arch}) ===")
+    t0 = time.time()
     X, y = extract_embeddings(model, loader, device)
-    print(f"✓ Embeddings: {X.shape}")
+    print(f"  Done ({time.time()-t0:.0f}s)  shape={X.shape}")
 
     # Save embeddings for potential reuse
     np.save(os.path.join(args.models_dir, "cnn_embeddings.npy"), X)
     np.save(os.path.join(args.models_dir, "cnn_labels.npy"),     y)
 
-    # Train/val/test split
-    X_tr, X_tmp, y_tr, y_tmp = train_test_split(
-        X, y, test_size=0.30, stratify=y, random_state=RANDOM_STATE)
-    X_val, X_te, y_val, y_te = train_test_split(
-        X_tmp, y_tmp, test_size=0.50, stratify=y_tmp, random_state=RANDOM_STATE)
-    print(f"Split  train={len(y_tr)}  val={len(y_val)}  test={len(y_te)}")
+    # ── Split ─────────────────────────────────────────────────────────────────
+    split_path = os.path.expanduser(args.split)
+    if os.path.exists(split_path):
+        print(f"\nUsing video-level split from {split_path}")
+        split = torch.load(split_path)
+        train_idx = list(split["train"])
+        test_idx  = list(split["test"])
+        X_tr, y_tr = X[train_idx], y[train_idx]
+        X_te, y_te = X[test_idx],  y[test_idx]
+        print(f"Split  train={len(y_tr)}  test={len(y_te)}  (video-level, no leakage)")
+    else:
+        print(f"\n⚠  split_indices.pt not found at {split_path} — falling back to frame-level split")
+        print("   Results may be inflated due to near-duplicate frames across train/test.")
+        X_tr, X_tmp, y_tr, y_tmp = train_test_split(
+            X, y, test_size=0.30, stratify=y, random_state=RANDOM_STATE)
+        _, X_te, _, y_te = train_test_split(
+            X_tmp, y_tmp, test_size=0.50, stratify=y_tmp, random_state=RANDOM_STATE)
+        print(f"Split  train={len(y_tr)}  test={len(y_te)}")
+
+    # ── Optional k-fold cross-validation ──────────────────────────────────────
+    if args.cv > 1:
+        print(f"\n=== {args.cv}-Fold Cross-Validation (on full embedding set) ===")
+        print("   Note: CV uses frame-level folds — results may be slightly optimistic.")
+        cv_clf = Pipeline([
+            ("scaler", StandardScaler()),
+            ("svm",    SVC(kernel='rbf', C=1.0, gamma='scale',
+                           probability=True, random_state=RANDOM_STATE)),
+        ])
+        skf = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=RANDOM_STATE)
+        scoring = ["accuracy", "precision_weighted", "recall_weighted", "f1_weighted", "roc_auc"]
+        t0 = time.time()
+        cv_results = cross_validate(cv_clf, X, y, cv=skf, scoring=scoring, n_jobs=1)
+        print(f"  CV complete ({time.time()-t0:.0f}s)")
+        print(f"\n  {'Metric':<22} {'Mean':>8} {'Std':>8}")
+        print(f"  {'─'*40}")
+        for metric in scoring:
+            key = f"test_{metric}"
+            vals = cv_results[key]
+            print(f"  {metric:<22} {vals.mean():>8.4f} {vals.std():>8.4f}")
+        print()
 
     # Train hybrid SVM on CNN embeddings
-    print("\n⏳ Training SVM on CNN embeddings...")
+    print(f"\n=== Training Hybrid SVM (train={len(y_tr)}) ===")
     hybrid_clf = Pipeline([
         ("scaler", StandardScaler()),
         ("svm",    SVC(kernel='rbf', C=1.0, gamma='scale',
                        probability=True, random_state=RANDOM_STATE)),
     ])
+    t0 = time.time()
+    print("  Step 1/2: Scaling CNN embeddings (StandardScaler)...")
+    print("  Step 2/2: Fitting SVM — libsvm optimisation, no step-level progress available...")
     hybrid_clf.fit(X_tr, y_tr)
+    print(f"  Fit complete ({time.time()-t0:.0f}s)")
 
     model_path = os.path.join(args.models_dir, "hybrid_svm.pkl")
     with open(model_path, 'wb') as f:
         pickle.dump(hybrid_clf, f)
-    print(f"💾 Saved hybrid SVM to {model_path}")
+    print(f"  Saved → {model_path}")
 
     metrics, y_prob = evaluate(hybrid_clf, X_te, y_te)
 

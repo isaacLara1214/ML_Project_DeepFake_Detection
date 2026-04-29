@@ -207,7 +207,7 @@ if __name__ == "__main__":
                              "If omitted, samples from data/faces/.")
     parser.add_argument("--n-samples",  type=int, default=5,
                         help="Number of real + fake images to visualize (default 5 each)")
-    parser.add_argument("--data-dir",  default="~/OneDrive/Desktop/DeepFake Detection_images/data/faces",
+    parser.add_argument("--data-dir",  default="~/projects/ML/data/faces",
                         help="Path to faces dir containing real/ and fake/ subfolders")
     parser.add_argument("--workers",   type=int, default=0,
                         help="(unused, accepted for CLI consistency)")

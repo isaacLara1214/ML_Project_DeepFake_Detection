@@ -27,3 +27,8 @@ Thumbs.db
 
 # ZIP files
 *.zip
+
+dev_notes.md
+CLAUDE.md
+cnn_embeddings.npy
+randomforest.pkl

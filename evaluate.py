@@ -45,7 +45,7 @@ def get_test_loader(data_dir, batch_size, num_workers, split_override=None):
     split_path = os.path.expanduser(split_override) if split_override else os.path.join(os.path.dirname(data_dir), "split_indices.pt")
     if not os.path.exists(split_path):
         raise FileNotFoundError(
-            f"{split_path} not found. Run train.py first (it auto-generates the split)."
+            f"{split_path} not found. Run generate_split.py first to create a video-level split."
         )
 
     split = torch.load(split_path)
@@ -166,7 +166,7 @@ if __name__ == "__main__":
                         help="Path to .pt checkpoint from train.py")
     parser.add_argument("--batch",      type=int, default=32)
     parser.add_argument("--workers",    type=int, default=4)
-    parser.add_argument("--data-dir",  default="~/OneDrive/Desktop/DeepFake Detection_images/data/faces",
+    parser.add_argument("--data-dir",  default="~/projects/ML/data/faces",
                         help="Path to faces dir containing real/ and fake/ subfolders")
     parser.add_argument("--split",    default=None,
                         help="Path to split_indices.pt (auto-detected if omitted)")
