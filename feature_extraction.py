@@ -172,7 +172,8 @@ def collect_paths(faces_dir: str, max_per_class: int):
             print(f"⚠  Missing directory: {label_dir}")
             continue
         count = 0
-        for root, _, files in os.walk(label_dir):
+        for root, dirs, files in os.walk(label_dir):
+            dirs.sort()  # match train.py DeepfakeDataset ordering
             for f in sorted(files):
                 if f.lower().endswith(('.jpg', '.jpeg', '.png')):
                     paths.append(os.path.join(root, f))
