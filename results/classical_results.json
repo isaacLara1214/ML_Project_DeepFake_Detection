@@ -1,55 +1,55 @@
 [
   {
     "model": "SVM_RBF",
-    "accuracy": 0.8304,
-    "precision": 0.8322,
-    "recall": 0.9946,
-    "f1": 0.9062,
-    "auc": 0.7583,
+    "accuracy": 0.3603,
+    "precision": 0.9475,
+    "recall": 0.2515,
+    "f1": 0.3975,
+    "auc": 0.66,
     "confusion_matrix": [
       [
-        266,
-        3927
+        3654,
+        286
       ],
       [
-        106,
-        19478
+        15368,
+        5163
       ]
     ]
   },
   {
     "model": "RandomForest",
-    "accuracy": 0.8312,
-    "precision": 0.8309,
-    "recall": 0.9983,
-    "f1": 0.9069,
-    "auc": 0.7687,
+    "accuracy": 0.1955,
+    "precision": 0.9678,
+    "recall": 0.0425,
+    "f1": 0.0815,
+    "auc": 0.6873,
     "confusion_matrix": [
       [
-        214,
-        3979
+        3911,
+        29
       ],
       [
-        34,
-        19550
+        19658,
+        873
       ]
     ]
   },
   {
     "model": "AdaBoost",
-    "accuracy": 0.8237,
-    "precision": 0.8237,
+    "accuracy": 0.839,
+    "precision": 0.839,
     "recall": 1.0,
-    "f1": 0.9033,
-    "auc": 0.6121,
+    "f1": 0.9124,
+    "auc": 0.5222,
     "confusion_matrix": [
       [
-        2,
-        4191
+        0,
+        3940
       ],
       [
         0,
-        19584
+        20531
       ]
     ]
   }
